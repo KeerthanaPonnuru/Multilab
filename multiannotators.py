@@ -252,10 +252,8 @@ def get_label_quality_multiannotator(
         "model_weight" : model_weight[0],
         "annotator_weight" : annotator_weight
     }
-
     
     return labels_info 
-
 
 def get_active_learning_scores(
     labels_multiannotator: Optional[Union[pd.DataFrame, np.ndarray]] = None,
@@ -362,19 +360,32 @@ def get_active_learning_scores(
             ]
             model_weight = multiannotator_info["model_weight"]
             annotator_weight = multiannotator_info["annotator_weight"]
-            avg_annotator_weight = np.mean(annotator_weight)
-
+            #annotator_weight_array = np.array(annotator_weight)
+            #annotator_weight = np.mean(annotator_weight_array)
+            
             N, M, K = labels_multiannotator.shape  
-            avg_annotator_weight = np.mean(annotator_weight)
-
+            avg_annotator_weight = np.mean(annotator_weight,axis=0)
+            annotator_weight=np.array(annotator_weight) 
+            model_weight = 1.0   
+            model_confidence = 2 * np.abs(pred_probs - 0.5)
             active_learning_scores = np.zeros((N, K))
+            print(quality_of_consensus_labeled)
+            for i in range(N):  
+                for j in range(K):
+                     
+                    annotator_labels_for_class = labels_multiannotator[i, :, j]
+                    sum_annotator_weights = np.sum(annotator_weight[:, j][annotator_labels_for_class == 1])
 
-            labels_multiannotator = np.random.randint(0, 2, (N, M, K)) 
-            quality_of_consensus_labeled = np.random.rand(N) 
-            annotator_weight = np.random.rand(M, K) 
-            model_weight = 1.0 
-            avg_annotator_weight = np.mean(annotator_weight, axis=0)  
+                    model_confidence_score = model_confidence[i, j]
 
+                    active_learning_scores[i, j] = np.average(
+                        [quality_of_consensus_labeled[i], model_confidence_score],
+                        weights=[
+                            sum_annotator_weights + model_weight,
+                            avg_annotator_weight[j]
+                        ]
+                    )
+            '''
             for i in range(N):  
                 for j in range(K):  
                     
@@ -386,7 +397,7 @@ def get_active_learning_scores(
                             sum_annotator_weights + model_weight,
                             avg_annotator_weight[j]  
                         ]
-                    )
+                    )'''
     
     elif pred_probs_unlabeled is not None:
         num_classes = get_num_classes(pred_probs=pred_probs_unlabeled)
@@ -419,9 +430,7 @@ def get_active_learning_scores(
         )
     else:
         active_learning_scores_unlabeled = np.array([])
-    
 
-    
     return active_learning_scores, active_learning_scores_unlabeled
 
 
