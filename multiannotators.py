@@ -344,9 +344,6 @@ def get_active_learning_scores(
 
         # examples are annotated by multiple annotators
         else:
-            optimal_temp = find_best_temp_scaler(labels_multiannotator, pred_probs)
-            pred_probs = temp_scale_pred_probs(pred_probs, optimal_temp)
-
             multiannotator_info = get_label_quality_multiannotator(
                 labels_multiannotator,
                 pred_probs,
@@ -355,24 +352,17 @@ def get_active_learning_scores(
                 return_weights=True,
             )
 
-            quality_of_consensus_labeled = multiannotator_info["label_quality"][
-                "consensus_quality_score"
-            ]
+            quality_of_consensus_labeled = multiannotator_info["label_quality"]["consensus_quality_score"]
             model_weight = multiannotator_info["model_weight"]
             annotator_weight = multiannotator_info["annotator_weight"]
-            #annotator_weight_array = np.array(annotator_weight)
-            #annotator_weight = np.mean(annotator_weight_array)
-            
             N, M, K = labels_multiannotator.shape  
             avg_annotator_weight = np.mean(annotator_weight,axis=0)
-            annotator_weight=np.array(annotator_weight) 
-            model_weight = 1.0   
+            annotator_weight=np.array(annotator_weight)    
             model_confidence = 2 * np.abs(pred_probs - 0.5)
             active_learning_scores = np.zeros((N, K))
-            print(quality_of_consensus_labeled)
+            
             for i in range(N):  
                 for j in range(K):
-                     
                     annotator_labels_for_class = labels_multiannotator[i, :, j]
                     sum_annotator_weights = np.sum(annotator_weight[:, j][annotator_labels_for_class == 1])
 
@@ -385,19 +375,10 @@ def get_active_learning_scores(
                             avg_annotator_weight[j]
                         ]
                     )
-            '''
-            for i in range(N):  
-                for j in range(K):  
-                    
-                    annotator_labels_for_class = labels_multiannotator[i, :, j]
-                    sum_annotator_weights = np.sum(annotator_weight[:, j][annotator_labels_for_class == 1])
-                    active_learning_scores[i, j] = np.average(
-                        [quality_of_consensus_labeled[i], 1 / num_classes],
-                        weights=[
-                            sum_annotator_weights + model_weight,
-                            avg_annotator_weight[j]  
-                        ]
-                    )'''
+
+            labeled = pd.DataFrame(active_learning_scores)
+            labeled.columns=column_name
+
     
     elif pred_probs_unlabeled is not None:
         num_classes = get_num_classes(pred_probs=pred_probs_unlabeled)
@@ -412,6 +393,7 @@ def get_active_learning_scores(
         )
 
     if pred_probs_unlabeled is not None:
+        labeled=np.array([])
         pred_probs_unlabeled = temp_scale_pred_probs(pred_probs_unlabeled, optimal_temp)
         
         quality_of_consensus_unlabeled = pred_probs_unlabeled  
@@ -428,10 +410,12 @@ def get_active_learning_scores(
             weights=[model_weight, avg_annotator_weight],
             axis=0,
         )
+        unlabeled=pd.DataFrame(active_learning_scores_unlabeled)
+        unlabeled.columns=column_name
     else:
-        active_learning_scores_unlabeled = np.array([])
+        unlabeled = np.array([])
 
-    return active_learning_scores, active_learning_scores_unlabeled
+    return labeled, unlabeled
 
 
 def break_tie(label_mode, pred_probs, threshold=0.5):    
@@ -941,7 +925,8 @@ def _get_consensus_quality_score(
             Please choose a valid quality_method: {valid_methods}
             """
         )
-
+    #print('cl',consensus_label)
+    #print('qs',consensus_quality_score)
     return consensus_quality_score
 
 
