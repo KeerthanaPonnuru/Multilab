@@ -12,6 +12,10 @@ from multiannotator_utils import (
     find_best_temp_scaler,
     temp_scale_pred_probs,
 )
+#replace with the annotator names in your dataset
+annotators=['wkratochvil', 'kmaisuria', 'hannahweisman', 'ezequielbautista','aribahali', 'kaelynnrodriguez', 'babatundeshofolu','rishika.patel@ufl.edu\\health', 'jennifer.noa']
+#replace with the labels names in the order of your dataset
+AU=['AU4', 'AU6', 'AU7', 'AU9', 'AU10', 'AU12', 'AU20', 'AU24', 'AU25', 'AU26','AU27', 'AU43']
 
 def get_label_quality_multiannotator(
     labels_multiannotator: Union[pd.DataFrame, np.ndarray],
@@ -200,8 +204,6 @@ def get_label_quality_multiannotator(
             )
 
         if main_method:
-            #replace this with the names of the annotators in your dataset
-            annotators=['wkratochvil', 'kmaisuria', 'hannahweisman', 'ezequielbautista','aribahali', 'kaelynnrodriguez', 'babatundeshofolu','rishika.patel@ufl.edu\\health', 'jennifer.noa']
             
             label_quality = pd.DataFrame({
                 'num_annotations': num_annotations,
@@ -258,8 +260,7 @@ def get_label_quality_multiannotator(
 def get_active_learning_scores(
     labels_multiannotator: Optional[Union[pd.DataFrame, np.ndarray]] = None,
     pred_probs: Optional[np.ndarray] = None,
-    pred_probs_unlabeled: Optional[np.ndarray] = None,
-    column_name: List[str] = None,
+    pred_probs_unlabeled: Optional[np.ndarray] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Returns an ActiveLab quality score for each example in the dataset, to estimate which examples are most informative to (re)label next in active learning.
 
@@ -377,7 +378,7 @@ def get_active_learning_scores(
                     )
 
             labeled = pd.DataFrame(active_learning_scores)
-            labeled.columns=column_name
+            labeled.columns=AU
             return labeled
 
     
@@ -412,7 +413,7 @@ def get_active_learning_scores(
             axis=0,
         )
         unlabeled=pd.DataFrame(active_learning_scores_unlabeled)
-        unlabeled.columns=column_name
+        unlabeled.columns=AU
         return unlabeled
 
 
@@ -543,8 +544,6 @@ def _get_consensus_stats(
             verbose=verbose,
         )
 
-
-
     # compute quality of the consensus labels
     consensus_quality_score = _get_consensus_quality_score(
         consensus_label=consensus_label,
@@ -640,21 +639,20 @@ def _get_annotator_stats(
         agreement_with_consensus[i] = np.mean(labels[labels_mask] == consensus_label[labels_mask])
 
     # Find the worst labeled class for each annotator
-    #worst_class = _get_annotator_worst_class(
-        #labels_multiannotator=labels_multiannotator,
-        #consensus_label=consensus_label,
-        #consensus_quality_score=consensus_quality_score,
-    #)
-    annotators=['wkratochvil', 'kmaisuria', 'hannahweisman', 'ezequielbautista','aribahali', 'kaelynnrodriguez', 'babatundeshofolu','rishika.patel@ufl.edu\\health', 'jennifer.noa']
-
+    worst_class = _get_annotator_worst_class_multi_label(
+        labels_multiannotator=labels_multiannotator,
+        consensus_label=consensus_label,
+        consensus_quality_score=consensus_quality_score,
+    )
+    
 
     # Create multi-annotator stats DataFrame from its columns
     annotator_stats = pd.DataFrame(
         {
             "annotator_quality": annotator_quality,
             "agreement_with_consensus": agreement_with_consensus,
-            #"worst_class": worst_class.tolist(),
-            "num_of_exampels_labelled":num_examples_labeled
+            "worst_class": worst_class,
+            "num_of_examples_labeled":num_examples_labeled
             
         },
         index=annotators,
@@ -1073,92 +1071,38 @@ def _get_annotator_quality(
 
     return annotator_quality
 
-
-def _get_annotator_worst_class(
+def _get_annotator_worst_class_multi_label(
     labels_multiannotator: np.ndarray,
     consensus_label: np.ndarray,
     consensus_quality_score: np.ndarray,
-) -> np.ndarray:
-    """Returns the class which each annotator makes the most errors in.
+) -> list:
+    """Returns the worst class for each annotator in a multi-label setting.
 
     Parameters
     ----------
-    labels_multiannotator : pd.DataFrame or np.ndarray
-        3D pandas DataFrame or array of multiple given labels per class for each example with shape ``(N, M, K)``,
-        where N is the number of examples, M is the number of annotators.
-        ``labels_multiannotator[n][m][k] - label for n-th example given by m-th annotator for k-th class.
-        For more details, labels in the same format expected by the `~cleanlab.multiannotator.get_label_quality_multiannotator`.
+    labels_multiannotator : np.ndarray
+        3D array of multiple given labels per class for each example with shape ``(N, M, K)``,
+        where N is the number of examples, M is the number of annotators, and K is the number of classes.
     consensus_label : np.ndarray
-        An array of shape ``(N,)`` with the consensus labels aggregated from all annotators.
+        An array of shape ``(N, K)`` with the consensus labels aggregated from all annotators.
     consensus_quality_score : np.ndarray
         An array of shape ``(N,)`` with the quality score of the consensus.
 
     Returns
     -------
-    worst_class : np.ndarray
-        The class that is most frequently mislabeled by a given annotator.
+    list
+        The worst class for each annotator.
     """
+    num_annotators = labels_multiannotator.shape[1]
+    worst_classes = []
 
-    worst_class = np.apply_along_axis(
-        _get_single_annotator_worst_class,
-        axis=0,
-        arr=labels_multiannotator,
-        consensus_label=consensus_label,
-        consensus_quality_score=consensus_quality_score,
-    ).astype(int)
-
-    return worst_class
-
-
-def _get_single_annotator_worst_class(
-    labels: np.ndarray,
-    consensus_label: np.ndarray,
-    consensus_quality_score: np.ndarray,
-) -> int:
-    """Returns the class a given annotator makes the most errors in.
-
-    Parameters
-    ----------
-    labels : np.ndarray
-        An array of shape ``(N,)`` with the labels from the annotator we want to evaluate.
-    consensus_label : np.ndarray
-        An array of shape ``(N,)`` with the consensus labels aggregated from all annotators.
-    consensus_quality_score : np.ndarray
-        An array of shape ``(N,)`` with the quality score of the consensus.
-
-    Returns
-    -------
-    worst_class : int
-        The class that is most frequently mislabeled by the given annotator.
-    """
-
-    labels = pd.Series(labels)
-    labels_mask = pd.notna(labels)
-    class_accuracies = (labels[labels_mask] == consensus_label[labels_mask]).groupby(labels).mean()
-    accuracy_min_idx = class_accuracies[class_accuracies == class_accuracies.min()].index.values
-
-    if len(accuracy_min_idx) == 1:
-        return accuracy_min_idx[0]
-
-    # tiebreak 1: class counts
-    class_count = labels[labels_mask].groupby(labels).count()[accuracy_min_idx]
-    count_max_idx = class_count[class_count == class_count.max()].index.values
-
-    if len(count_max_idx) == 1:
-        return count_max_idx[0]
-
-    # tiebreak 2: consensus quality scores
-    avg_consensus_quality = (
-        pd.DataFrame(
-            {"annotator_label": labels, "consensus_quality_score": consensus_quality_score}
-        )[labels_mask]
-        .groupby("annotator_label")
-        .mean()["consensus_quality_score"][count_max_idx]
-    )
-    quality_max_idx = avg_consensus_quality[
-        avg_consensus_quality == avg_consensus_quality.max()
-    ].index.values
-
-    # return first item even if there are ties - no better methods to tiebreak
-    return quality_max_idx[0]
+    for annotator_idx in range(num_annotators):
+        annotator_labels = labels_multiannotator[:, annotator_idx, :]
+        error_counts = np.sum(annotator_labels != consensus_label, axis=0)     
+        worst_class = np.argmax(error_counts)
+        worst_classes.append(worst_class)
+    labels = []  
+    for i in worst_classes:
+        labels.append(AU[i])  
+    return labels
 
