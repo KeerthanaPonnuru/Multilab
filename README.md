@@ -16,6 +16,7 @@ pip install "cleanlab[all]"
 
 ## Usage
 The `sample.ipynb` includes an example with sample data demonstrating how to use the code for multi-label, multi-annotator tasks. The general input parameters required are:
+- In multiannotators.py lines 16 and 18 respectively replace the annotator names and the labels names in the order of your dataset.
 
 - labels_multiannotator : 3D pandas DataFrame or array of multiple given labels per class for each example with shape (N, M, K)  
    
