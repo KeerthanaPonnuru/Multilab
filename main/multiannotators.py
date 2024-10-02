@@ -939,22 +939,23 @@ def _get_post_pred_probs_and_weights(
         most_likely_class_error = np.array(most_likely_class_error)
 
         annotator_agreement_with_annotators = _get_annotator_agreement_with_annotators(
-            labels_multiannotator, num_annotations,verbose
+            labels_multiannotator, num_annotations, verbose
         )
         
         annotator_error = 1 - annotator_agreement_with_annotators
         adjusted_annotator_agreement = np.clip(
             1 - (annotator_error), a_min=CLIPPING_LOWER_BOUND, a_max=None
         )
-        prob_mask = prior_pred_probs_subset > 0.5
-    
-        adjusted_labels = np.where(prob_mask, consensus_label_subset, 1 - consensus_label_subset)
-
-        model_error=np.mean(adjusted_labels, axis=0)
+        model_error = np.mean(abs(consensus_label_subset-prior_pred_probs_subset), axis=0)
+        #model_error=np.mean(adjusted_labels, axis=0)
         relative_performance = 1 - (model_error)
-        clipped_performance = np.maximum(relative_performance, CLIPPING_LOWER_BOUND)
+        class_positive_frequency = np.mean(consensus_label_subset, axis=0) 
+        class_weights = class_positive_frequency / (np.sum(class_positive_frequency) + CLIPPING_LOWER_BOUND)
+
+        #clipped_performance = np.maximum(relative_performance, CLIPPING_LOWER_BOUND)
         sqrt_mean_annotations = np.sqrt(np.mean(num_annotations))
-        model_weight = clipped_performance * sqrt_mean_annotations
+        
+        model_weight = np.average(relative_performance,weights=class_weights) * sqrt_mean_annotations
 
         post_pred_probs=prior_pred_probs
         return_model_weight = model_weight
