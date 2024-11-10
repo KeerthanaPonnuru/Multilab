@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Union, Tuple, Optional
 from rank import get_label_quality_scores
 from cleanlab.internal.util import get_num_classes, value_counts
 from cleanlab.internal.constants import CLIPPING_LOWER_BOUND
+import numpy as np
 
 from multiannotator_utils import (
     assert_valid_inputs_multiannotator,
@@ -13,9 +14,10 @@ from multiannotator_utils import (
     temp_scale_pred_probs,
 )
 #replace with the annotator names in your dataset
-annotators=['wkratochvil', 'kmaisuria', 'hannahweisman', 'ezequielbautista','aribahali', 'kaelynnrodriguez', 'babatundeshofolu','rishika.patel@ufl.edu\\health', 'jennifer.noa']
+annotators=['hannah_weisman', 'ezequiel_bautista', 'kaelynn_rodriguez','lucas_geraldi', 'jay_maisuria', 'william_kratochvil','ali_aribah']
 #replace with the labels names in the order of your dataset
 AU=['AU4', 'AU6', 'AU7', 'AU9', 'AU10', 'AU12', 'AU20', 'AU24', 'AU25', 'AU26','AU27', 'AU43']
+annotator_agreement_with_annotators = np.zeros((len(annotators), len(AU)))
 
 def get_label_quality_multiannotator(
     labels_multiannotator: Union[pd.DataFrame, np.ndarray],
@@ -161,6 +163,7 @@ def get_label_quality_multiannotator(
         majority_vote_label = get_majority_vote_label(
             labels_multiannotator=labels_multiannotator,
             pred_probs=pred_probs,
+            annotator_agreement_with_annotators=annotator_agreement_with_annotators,
             verbose=False,
         )
 
@@ -257,6 +260,48 @@ def get_label_quality_multiannotator(
     
     return labels_info 
 
+
+'''
+
+def get_multilabel_active_learning_scores(labels_multiannotator, pred_probs, K, M):
+    """
+    Calculate active learning scores for a multi-label, multi-annotator dataset.
+
+    Parameters:
+    - dataset: The multi-label dataset (N x M x K), where N is the number of examples, M is the number of annotators, and K is the number of labels.
+    - pred_probs: The predicted probabilities (N x K), where N is the number of examples and K is the number of labels.
+    - K: The number of labels (classes).
+    - M: The number of annotators.
+
+    Returns:
+    - multilabel_active_learning_scores: Array of active learning scores (N,).
+    """
+
+    # Initialize an array to hold the multi-label active learning scores
+    multilabel_active_learning_scores = np.zeros(len(labels_multiannotator))
+    consensus_label=get_majority_vote_label(
+            labels_multiannotator=labels_multiannotator,
+            pred_probs=pred_probs,
+            verbose=False,
+        )
+    consensus_label=consensus_label.tolist()
+
+    y_onevsrest = np.array(consensus_label)
+    pred_probs_class=pred_probs.T
+    for k in range(pred_probs_class.shape[0]):  
+
+        class_probs = pred_probs_class[k]  
+        
+        class_labels = y_onevsrest[k]        
+        
+        class_k_active_learning_scores = get_active_learning_scores(class_labels, class_probs)
+
+        
+        multilabel_active_learning_scores += class_k_active_learning_scores
+
+    return multilabel_active_learning_scores / K
+'''
+
 def get_active_learning_scores(
     labels_multiannotator: Optional[Union[pd.DataFrame, np.ndarray]] = None,
     pred_probs: Optional[np.ndarray] = None,
@@ -336,6 +381,7 @@ def get_active_learning_scores(
             consensus_label = get_majority_vote_label(
                 labels_multiannotator=labels_multiannotator,
                 pred_probs=pred_probs,
+                annotator_agreement_with_annotators=annotator_agreement_with_annotators,
                 verbose=False,
             )
             quality_of_consensus_labeled = get_label_quality_scores(consensus_label, pred_probs)
@@ -358,6 +404,7 @@ def get_active_learning_scores(
             consensus_label = get_majority_vote_label(
                 labels_multiannotator=labels_multiannotator,
                 pred_probs=pred_probs,
+                annotator_agreement_with_annotators=annotator_agreement_with_annotators,
                 verbose=False,
             )
             quality_of_consensus_labeled = multiannotator_info["label_quality"]["consensus_quality_score"]
@@ -403,15 +450,21 @@ def get_active_learning_scores(
                         'ActiveLearningScore': active_learning_scores[i, j],
                         'QualityOfConsensusLabeled': quality_of_consensus_labeled[i],
                         'AnnotatorLabels':labels_multiannotator[i, :, j],
-                        'CL':consensus_label[i, j],
+                        'MajorityLabel':consensus_label[i, j],
                         'Pred':pred_probs[i, j],
                         'ConfidenceScore': confidence_scores[i, j],
                         'NormalizedSumAnnotatorWeights': normalized_sum_annotator_weights
                     }
                     rows.append(row)
             detailed_scores = pd.DataFrame(rows)
+            #ignoring cases high model confidence and both model and majority annotators predicted AU absent
+            exclude_condition = ((detailed_scores['ConfidenceScore'] >= 0.5) &(detailed_scores['Pred'] <= 0.5) &(detailed_scores['MajorityLabel'] == 0))
+
+            #if only 2 annotators are 
             
-            relabeled = detailed_scores[(detailed_scores['ActiveLearningScore'] < 0.5) & (detailed_scores['NormalizedSumAnnotatorWeights'] < 0.5)]
+            relabeled = detailed_scores[
+                (detailed_scores['ActiveLearningScore'] < 0.5) & (detailed_scores['NormalizedSumAnnotatorWeights'] < 0.5) & ~exclude_condition
+                ]
 
             labeled = pd.DataFrame(active_learning_scores)
             labeled.columns=AU
@@ -462,7 +515,66 @@ def get_active_learning_scores(
     return unlabeled,relabeled
 
 
-def break_tie( j,probabilities, threshold):
+def break_tie(
+    annotator_indices_0: np.ndarray,
+    annotator_indices_1: np.ndarray,
+    adjusted_agreement: np.ndarray,
+    class_idx: int
+) -> int:
+    avg_agreement_0 = np.mean(adjusted_agreement[annotator_indices_0, class_idx]) if len(annotator_indices_0) > 0 else 0
+
+    avg_agreement_1 = np.mean(adjusted_agreement[annotator_indices_1, class_idx]) if len(annotator_indices_1) > 0 else 0
+
+    if avg_agreement_1 > avg_agreement_0:
+        return 1
+    else:
+        return 0
+
+
+def get_majority_vote_label(
+    labels_multiannotator: np.ndarray,
+    pred_probs: np.ndarray,
+    annotator_agreement_with_annotators: np.ndarray, #
+    verbose: bool = True
+) -> np.ndarray:
+
+    consensus_labels = []
+    num_classes = pred_probs.shape[1]
+    for i in range(labels_multiannotator.shape[0]):
+        example_labels = []
+        for j in range(num_classes):
+            column = labels_multiannotator[i, :, j]
+            non_nan_values = column[~np.isnan(column)].astype(int)
+
+            if len(non_nan_values) == 0:
+                example_labels.append(0)  
+                continue
+
+            # Count the votes for each label (0 and 1)
+            counts = np.bincount(non_nan_values, minlength=2)
+            max_count = np.max(counts)
+            indices = np.where(counts == max_count)[0]
+
+            # If there is a tie, use the adjusted agreement to break the tie
+            if len(indices) > 1:
+                # Get annotator indices for those who labeled 0 and those who labeled 1
+                annotator_indices_0 = np.where(column == 0)[0]
+                annotator_indices_1 = np.where(column == 1)[0]
+
+                # Use adjusted agreement to break the tie
+                tied_label = break_tie(annotator_indices_0, annotator_indices_1, annotator_agreement_with_annotators, j)
+                example_labels.append(tied_label)
+            elif len(indices) == 1:
+                example_labels.append(indices[0])
+            else:
+                example_labels.append(0)
+
+        consensus_labels.append(example_labels)
+    return np.array(consensus_labels)
+
+'''
+
+def break_tie(j,probabilities, threshold):
     if probabilities[j] >= threshold:
         return 1
     else:
@@ -501,81 +613,6 @@ def get_majority_vote_label(
     return np.array(consensus_labels)
 
 '''
-def break_tie(class_indices, probabilities, threshold=0.5):
-    decisions = []
-    for idx in class_indices:
-        if probabilities[idx] >= threshold:
-            decisions.append(1)  
-        else:
-            decisions.append(0)  
-    return decisions
-
-def get_majority_vote_label(
-    labels_multiannotator,
-    pred_probs,
-    verbose: bool = True 
-) -> np.ndarray:
-
-    a = []
-    num_classes = pred_probs.shape[1]
-    for i in range(labels_multiannotator.shape[0]):
-        most_repeating_values = []
-
-        for column in labels_multiannotator[i].T:
-
-            non_nan_values = column[~np.isnan(column)].astype(int)
-            counts = np.bincount(non_nan_values, minlength=num_classes)
-            max_count = np.max(counts)
-            indices = np.where(counts == max_count)[0]
-
-            if len(indices) > 1:
-                tied_label = break_tie(indices, pred_probs[i],0.5)
-                most_repeating_values.append(tied_label)
-            else:
-                most_repeating_values.append(indices[0])
-
-        a.append(most_repeating_values)
-
-    return np.array(a)
-
-def get_majority_vote_label(
-    labels_multiannotator,
-    pred_probs,
-    verbose: bool = True
-) -> np.ndarray:
-    consensus_labels = []
-    threshold=0.5  
-    num_classes = pred_probs.shape[1]
-    for i in range(labels_multiannotator.shape[0]):
-        example_labels = []
-
-        for j in range(num_classes):
-            column = labels_multiannotator[i, :, j]
-            non_nan_values = column[~np.isnan(column)].astype(int)
-            if len(non_nan_values) == 0:
-                # If no valid votes, use model prediction directly
-                example_labels.append(int(pred_probs[i, j] >= threshold))
-                continue
-
-            counts = np.bincount(non_nan_values, minlength=2)
-            max_count = np.max(counts)
-            indices = np.where(counts == max_count)[0]
-
-            if len(indices) > 1:
-                tied_labels = break_tie(indices, pred_probs[i], threshold)
-                example_labels.append(tied_labels[0] if tied_labels else 0)
-            else:
-                if indices[0] == 1 and pred_probs[i, j] >= threshold:
-                    example_labels.append(1)
-                elif indices[0] == 0 and pred_probs[i, j] < threshold:
-                    example_labels.append(0)
-                else:
-                    example_labels.append(indices[0])
-
-        consensus_labels.append(example_labels)
-
-    return np.array(consensus_labels)'''
-
 
 def convert_long_to_wide_dataset(
     labels_multiannotator_long: pd.DataFrame,
@@ -859,7 +896,6 @@ def _get_annotator_agreement_with_annotators(
 
     return annotator_agreement_with_annotators
 
-
 def _get_post_pred_probs_and_weights(
     labels_multiannotator: np.ndarray,
     consensus_label: np.ndarray,
@@ -916,7 +952,7 @@ def _get_post_pred_probs_and_weights(
     # only relevant for quality_method == crowdlab, return None for all other methods
     return_model_weight = None
     return_annotator_weight = None
-
+    print('version3')
     if quality_method == "crowdlab":
         num_classes = get_num_classes(pred_probs=prior_pred_probs)
 
@@ -941,7 +977,8 @@ def _get_post_pred_probs_and_weights(
         annotator_agreement_with_annotators = _get_annotator_agreement_with_annotators(
             labels_multiannotator, num_annotations,verbose
         )
-        
+        # compute adjusted annotator agreement (used as annotator weights)
+        print(type(annotator_agreement_with_annotators))
         annotator_error = 1 - annotator_agreement_with_annotators
         adjusted_annotator_agreement = np.clip(
             1 - (annotator_error), a_min=CLIPPING_LOWER_BOUND, a_max=None
@@ -950,16 +987,42 @@ def _get_post_pred_probs_and_weights(
     
         adjusted_labels = np.where(prob_mask, consensus_label_subset, 1 - consensus_label_subset)
 
+        # Compute model weight
+
         model_error=np.mean(adjusted_labels, axis=0)
         relative_performance = 1 - (model_error)
         clipped_performance = np.maximum(relative_performance, CLIPPING_LOWER_BOUND)
         sqrt_mean_annotations = np.sqrt(np.mean(num_annotations))
         model_weight = clipped_performance * sqrt_mean_annotations
 
-        post_pred_probs=prior_pred_probs
+        post_pred_probs = np.full(prior_pred_probs.shape, np.nan)
+        
+        #Adjusted probabilities
+        for i in range (prior_pred_probs.shape[1]):
+            post_pred_probs[:, i] = prior_pred_probs[:, i] * model_weight[i]
+        
+        #Annotators contribution
+     
+        for i in range(prior_pred_probs.shape[1]):  
+            for annotator_idx in range(labels_multiannotator.shape[1]):  
+                annotator_mask = ~np.isnan(labels_multiannotator[:, annotator_idx, i])  
+                if not annotator_mask.any():
+                    continue  
+
+                # Add annotator's contribution to posterior predictions
+                post_pred_probs[annotator_mask, i] += np.where(
+                    labels_multiannotator[annotator_mask, annotator_idx, i] == 1,  
+                    adjusted_annotator_agreement[annotator_idx, i] * consensus_likelihood, 
+                    adjusted_annotator_agreement[annotator_idx, i] * non_consensus_likelihood, 
+                )
+
+
+        total_weight = model_weight + np.sum(adjusted_annotator_agreement)
+        post_pred_probs /= total_weight
+
         return_model_weight = model_weight
         return_annotator_weight = adjusted_annotator_agreement
-
+        
     elif quality_method == "agreement":
         num_classes = get_num_classes(pred_probs=prior_pred_probs)
         label_counts = np.full((len(labels_multiannotator), num_classes), np.NaN)
