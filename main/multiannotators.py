@@ -183,8 +183,6 @@ def get_label_quality_multiannotator(
             label_quality_score_kwargs=label_quality_score_kwargs,
         )
 
-    
-
     valid_methods = ["majority_vote", "best_quality"]
     main_method = True
 
@@ -254,53 +252,11 @@ def get_label_quality_multiannotator(
         "label_quality": label_quality,
         "detailed_label_quality":df,
         "annotator_stats":annotator_stats,
-        "model_weight" : model_weight[0],
+        "model_weight" : model_weight,
         "annotator_weight" : annotator_weight
     }
     
     return labels_info 
-
-
-'''
-
-def get_multilabel_active_learning_scores(labels_multiannotator, pred_probs, K, M):
-    """
-    Calculate active learning scores for a multi-label, multi-annotator dataset.
-
-    Parameters:
-    - dataset: The multi-label dataset (N x M x K), where N is the number of examples, M is the number of annotators, and K is the number of labels.
-    - pred_probs: The predicted probabilities (N x K), where N is the number of examples and K is the number of labels.
-    - K: The number of labels (classes).
-    - M: The number of annotators.
-
-    Returns:
-    - multilabel_active_learning_scores: Array of active learning scores (N,).
-    """
-
-    # Initialize an array to hold the multi-label active learning scores
-    multilabel_active_learning_scores = np.zeros(len(labels_multiannotator))
-    consensus_label=get_majority_vote_label(
-            labels_multiannotator=labels_multiannotator,
-            pred_probs=pred_probs,
-            verbose=False,
-        )
-    consensus_label=consensus_label.tolist()
-
-    y_onevsrest = np.array(consensus_label)
-    pred_probs_class=pred_probs.T
-    for k in range(pred_probs_class.shape[0]):  
-
-        class_probs = pred_probs_class[k]  
-        
-        class_labels = y_onevsrest[k]        
-        
-        class_k_active_learning_scores = get_active_learning_scores(class_labels, class_probs)
-
-        
-        multilabel_active_learning_scores += class_k_active_learning_scores
-
-    return multilabel_active_learning_scores / K
-'''
 
 def get_active_learning_scores(
     labels_multiannotator: Optional[Union[pd.DataFrame, np.ndarray]] = None,
@@ -384,7 +340,9 @@ def get_active_learning_scores(
                 annotator_agreement_with_annotators=annotator_agreement_with_annotators,
                 verbose=False,
             )
+            
             quality_of_consensus_labeled = get_label_quality_scores(consensus_label, pred_probs)
+            
             model_weight = 1
             annotator_weight = np.full(labels_multiannotator.shape[1], 1)
             avg_annotator_weight = np.mean(annotator_weight)
@@ -409,6 +367,7 @@ def get_active_learning_scores(
             )
             quality_of_consensus_labeled = multiannotator_info["label_quality"]["consensus_quality_score"]
             model_weight = multiannotator_info["model_weight"]
+
             annotator_weight = multiannotator_info["annotator_weight"]
             N, M, K = labels_multiannotator.shape  
             avg_annotator_weight = np.mean(annotator_weight,axis=0)
@@ -457,7 +416,7 @@ def get_active_learning_scores(
                     }
                     rows.append(row)
             detailed_scores = pd.DataFrame(rows)
-            #ignoring cases high model confidence and both model and majority annotators predicted AU absent
+            #ignoring true negative cases high model confidence and both model and majority annotators predicted AU absent
             exclude_condition = ((detailed_scores['ConfidenceScore'] >= 0.5) &(detailed_scores['Pred'] <= 0.5) &(detailed_scores['MajorityLabel'] == 0))
 
             #if only 2 annotators are 
@@ -952,7 +911,7 @@ def _get_post_pred_probs_and_weights(
     # only relevant for quality_method == crowdlab, return None for all other methods
     return_model_weight = None
     return_annotator_weight = None
-    print('version3')
+    
     if quality_method == "crowdlab":
         num_classes = get_num_classes(pred_probs=prior_pred_probs)
 
@@ -978,31 +937,75 @@ def _get_post_pred_probs_and_weights(
             labels_multiannotator, num_annotations,verbose
         )
         # compute adjusted annotator agreement (used as annotator weights)
-        print(type(annotator_agreement_with_annotators))
         annotator_error = 1 - annotator_agreement_with_annotators
         adjusted_annotator_agreement = np.clip(
             1 - (annotator_error), a_min=CLIPPING_LOWER_BOUND, a_max=None
         )
-        prob_mask = prior_pred_probs_subset > 0.5
+        prob_mask = 2 * np.abs(prior_pred_probs_subset - 0.5) >= 0.5
     
         adjusted_labels = np.where(prob_mask, consensus_label_subset, 1 - consensus_label_subset)
 
         # Compute model weight
+        threshold = 0.5
 
-        model_error=np.mean(adjusted_labels, axis=0)
-        relative_performance = 1 - (model_error)
-        clipped_performance = np.maximum(relative_performance, CLIPPING_LOWER_BOUND)
-        sqrt_mean_annotations = np.sqrt(np.mean(num_annotations))
-        model_weight = clipped_performance * sqrt_mean_annotations
+        # Compute model correctness: 1 if correct, 0 if incorrect
+        correct_predictions_per_class = []
 
+        # Loop through each class
+        for i in range(prior_pred_probs_subset.shape[1]):
+            correct_predictions = (
+                ((prior_pred_probs_subset[:, i] >= threshold) & (consensus_label_subset[:, i] == 1)) |
+                ((prior_pred_probs_subset[:, i] < threshold) & (consensus_label_subset[:, i] == 0))
+            )
+            correct_predictions_per_class.append(correct_predictions)
+
+        # Convert list to numpy array for further processing if needed
+        correct_predictions_per_class = np.array(correct_predictions_per_class)
+
+        # Compute model error for each class
+        model_error_per_class = 1 - np.mean(correct_predictions_per_class, axis=1)
+
+        # Calculate model error
+
+        model_weights = []
+
+        for i in range(len(model_error_per_class)):
+            # Avoid division by zero by adding a small epsilon
+            if most_likely_class_error[i] == 0:
+                most_likely_class_error[i] = CLIPPING_LOWER_BOUND
+            
+            # Calculate weight per class
+            try:
+                weight = np.max(
+                    [(1 - (model_error_per_class[i] / most_likely_class_error[i])), CLIPPING_LOWER_BOUND]
+                ) * np.sqrt(np.mean(num_annotations[i]) if num_annotations[i] > 0 else 0)  # Check if num_annotations[i] > 0
+            except Exception as e:
+                print(f"Error calculating weight for class {i}: {e}")
+                weight = CLIPPING_LOWER_BOUND  # Fallback to lower bound if error occurs
+            
+            model_weights.append(weight)
+
+        # Convert to numpy array for further processing if needed
+        model_weights = np.array(model_weights)
+
+        # Min-Max scaling
+        min_weight = np.min(model_weights)
+        max_weight = np.max(model_weights)
+
+        # Avoid division by zero if all weights are the same
+        if max_weight != min_weight:
+            scaled_model_weight = (model_weights - min_weight) / (max_weight - min_weight)
+        else:
+            sacled_model_weight = np.zeros_like(model_weights)  # All weights are the same, return zero for all weights
+
+        model_weight=np.mean(scaled_model_weight)
         post_pred_probs = np.full(prior_pred_probs.shape, np.nan)
         
         #Adjusted probabilities
         for i in range (prior_pred_probs.shape[1]):
-            post_pred_probs[:, i] = prior_pred_probs[:, i] * model_weight[i]
+            post_pred_probs[:, i] = prior_pred_probs[:, i] * model_weights[i]
         
         #Annotators contribution
-     
         for i in range(prior_pred_probs.shape[1]):  
             for annotator_idx in range(labels_multiannotator.shape[1]):  
                 annotator_mask = ~np.isnan(labels_multiannotator[:, annotator_idx, i])  
@@ -1216,7 +1219,6 @@ def _get_annotator_quality(
         annotator_weight_adjusted = np.sum(annotator_weight) * avg_num_annotations_frac
 
         w = model_weight / (model_weight + annotator_weight_adjusted)
-        w=w[0]
         
         annotator_quality = w * annotator_lqs + (1 - w) * annotator_agreement
 
